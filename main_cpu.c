@@ -128,8 +128,8 @@ int main (void) {
 	
 	// number of cells in x and y directions
 	// including unused boundary cells
-	uint num_rows = 2048 + 2;
-	uint num_cols = 2048 + 2;
+	uint num_rows = 4096 + 2;
+	uint num_cols = 4096 + 2;
 	uint size_temp = num_rows * num_cols;
 	uint size = (num_rows - 2) * (num_cols - 2);
 	
@@ -208,7 +208,7 @@ int main (void) {
 	clock_t end_time = clock();
 	/////////////////////////////////
 	
-	printf("Iterations: %i\n", iter);
+	printf("CPU\nIterations: %i\n", iter);
 	printf("Time: %f\n", (end_time - start_time) / (double)CLOCKS_PER_SEC);
 	
 	FILE * pfile;

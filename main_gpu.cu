@@ -193,12 +193,23 @@ int main (void) {
 	CUDA_SAFE_CALL (cudaMemcpy (temp_d, temp, size_temp * sizeof(Real), cudaMemcpyHostToDevice));
 	
 	// block size
-	const uint block_size = 32;
-	dim3 dimBlock (1, block_size);
+	const uint block_size = 64;
 	
-	// grid size
-	dim3 dimGrid (num_rows - 2, (num_cols - 2) / block_size);
+	// block and grid dimensions
 	
+	///////////////////////////////////////
+	// naive (no coalescing)
+	dim3 dimBlock (block_size, 1);
+	dim3 dimGrid ((num_rows - 2) / block_size, (num_cols - 2));
+	///////////////////////////////////////
+	
+	///////////////////////////////////////
+	// coalescing
+	//dim3 dimBlock (1, block_size);
+	//dim3 dimGrid (num_rows - 2, (num_cols - 2) / block_size);
+	///////////////////////////////////////
+	
+		
 	// iteration loop
 	for (iter = 1; iter <= it_max; ++iter) {
 		
@@ -243,7 +254,7 @@ int main (void) {
 	clock_t end_time = clock();
 	/////////////////////////////////
 	
-	printf("Iterations: %i\n", iter);
+	printf("GPU\nIterations: %i\n", iter);
 	printf("Time: %f\n", (end_time - start_time) / (double)CLOCKS_PER_SEC);
 	
 	FILE * pfile;
