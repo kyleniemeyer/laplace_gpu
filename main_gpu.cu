@@ -199,14 +199,14 @@ int main (void) {
 	
 	///////////////////////////////////////
 	// naive (no coalescing)
-	dim3 dimBlock (block_size, 1);
-	dim3 dimGrid ((num_rows - 2) / block_size, (num_cols - 2));
+	//dim3 dimBlock (block_size, 1);
+	//dim3 dimGrid ((num_rows - 2) / block_size, (num_cols - 2));
 	///////////////////////////////////////
 	
 	///////////////////////////////////////
 	// coalescing
-	//dim3 dimBlock (1, block_size);
-	//dim3 dimGrid (num_rows - 2, (num_cols - 2) / block_size);
+	dim3 dimBlock (1, block_size);
+	dim3 dimGrid (num_rows - 2, (num_cols - 2) / block_size);
 	///////////////////////////////////////
 	
 		
