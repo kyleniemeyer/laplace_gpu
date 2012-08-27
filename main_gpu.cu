@@ -13,7 +13,10 @@
 typedef unsigned int uint;
 
 /** SOR relaxation parameter */
-#define omega 1.85
+const Real omega = 1.85;
+
+// block size
+const uint block_size = 64;
 
 void fill_coeffs (uint rowmax, uint colmax, Real th_cond, Real dx, Real dy,
 				  				Real width, Real TN, Real * aP, Real * aW, Real * aE, 
@@ -66,10 +69,15 @@ void fill_coeffs (uint rowmax, uint colmax, Real th_cond, Real dx, Real dy,
 
 __global__ void red_kernel (uint rowmax, uint colmax, const Real * aP,
 														const Real * aW, const Real * aE, const Real * aS,
-														const Real * aN, const Real * b, Real * temp)
+														const Real * aN, const Real * b, Real * temp, Real * bl_norm_L2)
 {	
 	uint row = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
 	uint col = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
+
+	// store residual for block
+	__shared__ Real res_cache[block_size];
+	
+	res_cache[threadIdx.y] = 0.0;
 		
 	// only red cell if even
 	if ((row + col) % 2 == 0) {
@@ -81,16 +89,47 @@ __global__ void red_kernel (uint rowmax, uint colmax, const Real * aP,
 										   + aS[ind] * temp[col * rowmax + (row - 1)]
 										   + aN[ind] * temp[col * rowmax + (row + 1)]);
 	
-		temp[ind2] = temp[ind2] * (1.0 - omega) + omega * (res / aP[ind]);
+		//temp[ind2] = temp[ind2] * (1.0 - omega) + omega * (res / aP[ind]);
+		Real temp_old = temp[ind2];
+		Real temp_new = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
+		
+		temp[ind2] = temp_new;
+		res = temp_old - temp_new;
+		
+		// store squared residual from each thread
+		res_cache[threadIdx.y] = res * res;
+		
+		// synchronize threads in block
+		__syncthreads();
+		
+		// add up squared residuals for block
+		uint i = block_size / 2;
+		while (i != 0) {
+			if (threadIdx.y < i) {
+				res_cache[threadIdx.y] += res_cache[threadIdx.y + i];
+			}
+			__syncthreads();
+			i /= 2;
+		}
+		
+		// store block's summed residuals
+		if (threadIdx.y == 0) {
+			bl_norm_L2[blockIdx.x + (gridDim.x * blockIdx.y)] = res_cache[0];
+		}
 	}
 }
 
 __global__ void black_kernel (uint rowmax, uint colmax, const Real * aP,
 														  const Real * aW, const Real * aE, const Real * aS,
-														  const Real * aN, const Real * b, Real * temp)
+														  const Real * aN, const Real * b, Real * temp, Real * bl_norm_L2)
 {	
 	uint row = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
 	uint col = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
+	
+	// store residual for block
+	__shared__ Real res_cache[block_size];
+	
+	res_cache[threadIdx.y] = 0.0;
 	
 	// only black cell if odd
 	if ((row + col) % 2 == 1) {
@@ -102,7 +141,33 @@ __global__ void black_kernel (uint rowmax, uint colmax, const Real * aP,
 										   + aS[ind] * temp[col * rowmax + (row - 1)]
 										   + aN[ind] * temp[col * rowmax + (row + 1)]);
 		
-		temp[ind2] = temp[ind2] * (1.0 - omega) + omega * (res / aP[ind]);	
+		//temp[ind2] = temp[ind2] * (1.0 - omega) + omega * (res / aP[ind]);
+		Real temp_old = temp[ind2];
+		Real temp_new = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
+		
+		temp[ind2] = temp_new;
+		res = temp_old - temp_new;
+		
+		// store squared residual from each thread
+		res_cache[threadIdx.y] = res * res;
+		
+		// synchronize threads in block
+		__syncthreads();
+		
+		// add up squared residuals for block
+		uint i = block_size / 2;
+		while (i != 0) {
+			if (threadIdx.y < i) {
+				res_cache[threadIdx.y] += res_cache[threadIdx.y + i];
+			}
+			__syncthreads();
+			i /= 2;
+		}
+		
+		// store block's summed residuals
+		if (threadIdx.y == 0) {
+			bl_norm_L2[blockIdx.x + (gridDim.x * blockIdx.y)] = res_cache[0];
+		}
 	}
 }
 
@@ -124,8 +189,8 @@ int main (void) {
 	
 	// number of cells in x and y directions
 	// including unused boundary cells
-	uint num_rows = 128 + 2;
-	uint num_cols = 128 + 2;
+	uint num_rows = 4096 + 2;
+	uint num_cols = 4096 + 2;
 	uint size_temp = num_rows * num_cols;
 	uint size = (num_rows - 2) * (num_cols - 2);
 	
@@ -192,9 +257,6 @@ int main (void) {
 	CUDA_SAFE_CALL (cudaMemcpy (b_d, b, size * sizeof(Real), cudaMemcpyHostToDevice));
 	CUDA_SAFE_CALL (cudaMemcpy (temp_d, temp, size_temp * sizeof(Real), cudaMemcpyHostToDevice));
 	
-	// block size
-	const uint block_size = 64;
-	
 	// block and grid dimensions
 	
 	///////////////////////////////////////
@@ -209,35 +271,56 @@ int main (void) {
 	dim3 dimGrid (num_rows - 2, (num_cols - 2) / block_size);
 	///////////////////////////////////////
 	
+	Real *bl_norm_L2, *bl_norm_L2_d;
+	
+	bl_norm_L2 = (Real *) calloc (dimGrid.x * dimGrid.y, sizeof(Real));
+	CUDA_SAFE_CALL (cudaMalloc ((void**) &bl_norm_L2_d, dimGrid.x * dimGrid.y * sizeof(Real)));
 		
 	// iteration loop
 	for (iter = 1; iter <= it_max; ++iter) {
 		
+		Real norm_L2 = 0.0;
+		
 		// update red cells
-		red_kernel <<<dimGrid, dimBlock>>> (num_rows, num_cols, aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_d);
+		red_kernel <<<dimGrid, dimBlock>>> (num_rows, num_cols, aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_d, bl_norm_L2_d);
+		
+		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, dimGrid.x * dimGrid.y * sizeof(Real), cudaMemcpyDeviceToHost));
+		for (uint i = 0; i < (dimGrid.x * dimGrid.y); ++i) {
+			norm_L2 += bl_norm_L2[i];
+		}
 		
 		// update black cells
-		black_kernel <<<dimGrid, dimBlock>>> (num_rows, num_cols, aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_d);
+		black_kernel <<<dimGrid, dimBlock>>> (num_rows, num_cols, aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_d, bl_norm_L2_d);
 		
 		// sync threads (needed?)
-		CUDA_SAFE_CALL (cudaThreadSynchronize());
+		//CUDA_SAFE_CALL (cudaThreadSynchronize());
 		
 		// transfer memory back to host to check for convergence
-		CUDA_SAFE_CALL (cudaMemcpy (temp, temp_d, size_temp * sizeof(Real), cudaMemcpyDeviceToHost));
+		//CUDA_SAFE_CALL (cudaMemcpy (temp, temp_d, size_temp * sizeof(Real), cudaMemcpyDeviceToHost));
+		
+		// transfer residuals back
+		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, dimGrid.x * dimGrid.y * sizeof(Real), cudaMemcpyDeviceToHost));
 		
 		// check residual to see if done with iterations
-		Real norm_L2 = 0.0;
+		/*
 		for (uint i = 0; i < size_temp; ++i) {
 			norm_L2 += (temp[i] - temp_old[i]) * (temp[i] - temp_old[i]);
 			temp_old[i] = temp[i];
 		}
-		norm_L2 = sqrt(norm_L2 / (size));
+		*/
+		for (uint i = 0; i < (dimGrid.x * dimGrid.y); ++i) {
+			norm_L2 += bl_norm_L2[i];
+		}
+		norm_L2 = sqrt(norm_L2 / size);
 		
 		// if tolerance has been reached, end SOR iterations
 		if (norm_L2 < tol) {
 			break;
 		}	
 	}
+	
+	// transfer final temperature values back
+	CUDA_SAFE_CALL (cudaMemcpy (temp, temp_d, size_temp * sizeof(Real), cudaMemcpyDeviceToHost));
 	
 	// free device memory
 	CUDA_SAFE_CALL (cudaFree(aP_d));
@@ -247,6 +330,8 @@ int main (void) {
 	CUDA_SAFE_CALL (cudaFree(aN_d));
 	CUDA_SAFE_CALL (cudaFree(b_d));
 	CUDA_SAFE_CALL (cudaFree(temp_d));
+	
+	CUDA_SAFE_CALL (cudaFree(bl_norm_L2_d));
 	
 	/////////////////////////////////
 	// end timer
@@ -283,6 +368,8 @@ int main (void) {
 	free(b);
 	free(temp);
 	free(temp_old);
+	
+	free(bl_norm_L2);
 	
 	cudaDeviceReset();
 	
