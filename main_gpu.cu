@@ -15,8 +15,10 @@ typedef unsigned int uint;
 /** SOR relaxation parameter */
 const Real omega = 1.85;
 
+#define NUM 1024
+
 // block size
-const uint block_size = 64;
+#define BLOCK_SIZE 128
 
 void fill_coeffs (uint rowmax, uint colmax, Real th_cond, Real dx, Real dy,
 				  				Real width, Real TN, Real * aP, Real * aW, Real * aE, 
@@ -67,27 +69,26 @@ void fill_coeffs (uint rowmax, uint colmax, Real th_cond, Real dx, Real dy,
 	} // end for col
 }
 
-__global__ void red_kernel (uint rowmax, uint colmax, const Real * aP,
-														const Real * aW, const Real * aE, const Real * aS,
+__global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE, const Real * aS,
 														const Real * aN, const Real * b, Real * temp, Real * bl_norm_L2)
 {	
 	uint row = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
 	uint col = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
 
 	// store residual for block
-	__shared__ Real res_cache[block_size];
+	__shared__ Real res_cache[BLOCK_SIZE];
 	
 	res_cache[threadIdx.y] = 0.0;
 		
 	// only red cell if even
 	if ((row + col) % 2 == 0) {
-		uint ind = (col - 1) * (rowmax - 2) + (row - 1);
-		uint ind2 = col * rowmax + row;
+		uint ind = (col - 1) * NUM + (row - 1);
+		uint ind2 = col * (NUM + 2) + row;
 	
-		Real res = b[ind] + (aW[ind] * temp[(col - 1) * rowmax + row]
-										   + aE[ind] * temp[(col + 1) * rowmax + row]
-										   + aS[ind] * temp[col * rowmax + (row - 1)]
-										   + aN[ind] * temp[col * rowmax + (row + 1)]);
+		Real res = b[ind] + (aW[ind] * temp[(col - 1) * (NUM + 2) + row]
+										   + aE[ind] * temp[(col + 1) * (NUM + 2) + row]
+										   + aS[ind] * temp[col * (NUM + 2) + (row - 1)]
+										   + aN[ind] * temp[col * (NUM + 2) + (row + 1)]);
 	
 		//temp[ind2] = temp[ind2] * (1.0 - omega) + omega * (res / aP[ind]);
 		Real temp_old = temp[ind2];
@@ -103,7 +104,7 @@ __global__ void red_kernel (uint rowmax, uint colmax, const Real * aP,
 		__syncthreads();
 		
 		// add up squared residuals for block
-		uint i = block_size / 2;
+		uint i = BLOCK_SIZE / 2;
 		while (i != 0) {
 			if (threadIdx.y < i) {
 				res_cache[threadIdx.y] += res_cache[threadIdx.y + i];
@@ -119,27 +120,26 @@ __global__ void red_kernel (uint rowmax, uint colmax, const Real * aP,
 	}
 }
 
-__global__ void black_kernel (uint rowmax, uint colmax, const Real * aP,
-														  const Real * aW, const Real * aE, const Real * aS,
+__global__ void black_kernel (const Real * aP, const Real * aW, const Real * aE, const Real * aS,
 														  const Real * aN, const Real * b, Real * temp, Real * bl_norm_L2)
 {	
 	uint row = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
 	uint col = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
 	
 	// store residual for block
-	__shared__ Real res_cache[block_size];
+	__shared__ Real res_cache[BLOCK_SIZE];
 	
 	res_cache[threadIdx.y] = 0.0;
 	
 	// only black cell if odd
 	if ((row + col) % 2 == 1) {
-		uint ind = (col - 1) * (rowmax - 2) + (row - 1);
-		uint ind2 = col * rowmax + row;
+		uint ind = (col - 1) * NUM + (row - 1);
+		uint ind2 = col * (NUM + 2) + row;
 		
-		Real res = b[ind] + (aW[ind] * temp[(col - 1) * rowmax + row]
-										   + aE[ind] * temp[(col + 1) * rowmax + row]
-										   + aS[ind] * temp[col * rowmax + (row - 1)]
-										   + aN[ind] * temp[col * rowmax + (row + 1)]);
+		Real res = b[ind] + (aW[ind] * temp[(col - 1) * (NUM + 2) + row]
+										   + aE[ind] * temp[(col + 1) * (NUM + 2) + row]
+										   + aS[ind] * temp[col * (NUM + 2) + (row - 1)]
+										   + aN[ind] * temp[col * (NUM + 2) + (row + 1)]);
 		
 		//temp[ind2] = temp[ind2] * (1.0 - omega) + omega * (res / aP[ind]);
 		Real temp_old = temp[ind2];
@@ -155,7 +155,7 @@ __global__ void black_kernel (uint rowmax, uint colmax, const Real * aP,
 		__syncthreads();
 		
 		// add up squared residuals for block
-		uint i = block_size / 2;
+		uint i = BLOCK_SIZE / 2;
 		while (i != 0) {
 			if (threadIdx.y < i) {
 				res_cache[threadIdx.y] += res_cache[threadIdx.y + i];
@@ -189,14 +189,14 @@ int main (void) {
 	
 	// number of cells in x and y directions
 	// including unused boundary cells
-	uint num_rows = 4096 + 2;
-	uint num_cols = 4096 + 2;
+	uint num_rows = NUM + 2;
+	uint num_cols = NUM + 2;
 	uint size_temp = num_rows * num_cols;
-	uint size = (num_rows - 2) * (num_cols - 2);
+	uint size = NUM * NUM;
 	
 	// size of cells
-	Real dx = L / (num_rows - 2);
-	Real dy = H / (num_cols - 2);
+	Real dx = L / NUM;
+	Real dy = H / NUM;
 	
 	// iterations for Red-Black Gauss-Seidel with SOR
 	uint iter;
@@ -220,7 +220,7 @@ int main (void) {
 	temp_old = (Real *) calloc (size_temp, sizeof(Real));
 	
 	// set coefficients
-	fill_coeffs (num_rows - 2, num_cols - 2, th_cond, dx, dy, width, TN, aP, aW, aE, aS, aN, b);
+	fill_coeffs (NUM, NUM, th_cond, dx, dy, width, TN, aP, aW, aE, aS, aN, b);
 	
 	for (uint i = 0; i < size_temp; ++i) {
 		temp[i] = 0.0;
@@ -261,14 +261,14 @@ int main (void) {
 	
 	///////////////////////////////////////
 	// naive (no coalescing)
-	//dim3 dimBlock (block_size, 1);
-	//dim3 dimGrid ((num_rows - 2) / block_size, (num_cols - 2));
+	//dim3 dimBlock (BLOCK_SIZE, 1);
+	//dim3 dimGrid ((num_rows - 2) / BLOCK_SIZE, (num_cols - 2));
 	///////////////////////////////////////
 	
 	///////////////////////////////////////
 	// coalescing
-	dim3 dimBlock (1, block_size);
-	dim3 dimGrid (num_rows - 2, (num_cols - 2) / block_size);
+	dim3 dimBlock (1, BLOCK_SIZE);
+	dim3 dimGrid (NUM, NUM / BLOCK_SIZE);
 	///////////////////////////////////////
 	
 	Real *bl_norm_L2, *bl_norm_L2_d;
@@ -282,7 +282,7 @@ int main (void) {
 		Real norm_L2 = 0.0;
 		
 		// update red cells
-		red_kernel <<<dimGrid, dimBlock>>> (num_rows, num_cols, aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_d, bl_norm_L2_d);
+		red_kernel <<<dimGrid, dimBlock>>> (aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_d, bl_norm_L2_d);
 		
 		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, dimGrid.x * dimGrid.y * sizeof(Real), cudaMemcpyDeviceToHost));
 		for (uint i = 0; i < (dimGrid.x * dimGrid.y); ++i) {
@@ -290,7 +290,7 @@ int main (void) {
 		}
 		
 		// update black cells
-		black_kernel <<<dimGrid, dimBlock>>> (num_rows, num_cols, aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_d, bl_norm_L2_d);
+		black_kernel <<<dimGrid, dimBlock>>> (aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_d, bl_norm_L2_d);
 		
 		// sync threads (needed?)
 		//CUDA_SAFE_CALL (cudaThreadSynchronize());
