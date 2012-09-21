@@ -1,5 +1,5 @@
 /** CPU Laplace solver using optimized red-black Gauss–Seidel with SOR solver
- * \file main_cpu_opt.c
+ * \file main_cpu.c
  *
  * \author Kyle E. Niemeyer
  * \date 09/21/2012
