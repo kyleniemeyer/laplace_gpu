@@ -4,7 +4,7 @@ SHELL = /bin/sh
 .SUFFIXES: .cu .cu.o .c .o
 
 CUDA_PATH = /usr/local/cuda
-SDK_PATH = /Developer/GPU\ Computing/
+SDK_PATH = /Developer/GPU\ Computing
 
 NVCC = $(CUDA_PATH)/bin/nvcc
 CC = gcc
@@ -16,7 +16,7 @@ ifndef L
 endif
 
 INCLUDES = -I. -I$(CUDA_PATH)/include/ -I$(SDK_PATH)/C/common/inc/
-LIBS = -L$(CUDA_PATH)/lib -lcuda -lcudart -L$(SDK_PATH)/C/lib/ -lcutil_x86_64
+LIBS = -L$(CUDA_PATH)/lib -lcuda -L$(SDK_PATH)/C/lib/ -lcutil_x86_64
 
 OBJ_CPU = main_cpu.o
 OBJ_GPU = main_gpu.cu.o
