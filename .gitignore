@@ -1,0 +1,9 @@
+# Compiled Object files
+*.o
+
+# image files
+*.eps
+*.pdf
+
+# data files
+*.dat
