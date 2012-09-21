@@ -43,14 +43,14 @@ NVCCFLAGS  += --compiler-bindir=llvm-gcc-4.2
 %.o : %.c
 	$(CC) -c -o $@ $< $(FLAGS) $(INCLUDES)
 
-all : test_cpu test_gpu
+all : laplace_cpu laplace_gpu
 
-test_cpu : $(OBJ_CPU)
-	$(CC) -o test_cpu $(OBJ_CPU) $(LIBS) $(FLAGS)
+laplace_cpu : $(OBJ_CPU)
+	$(CC) -o laplace_cpu $(OBJ_CPU) $(LIBS) $(FLAGS)
 
-test_gpu : $(OBJ_GPU)
-	$(LINK) -o test_gpu $(OBJ_GPU) $(LIBS) $(FLAGS)
+laplace_gpu : $(OBJ_GPU)
+	$(LINK) -o laplace_gpu $(OBJ_GPU) $(LIBS) $(FLAGS)
 
 .PHONY : clean
 clean :
-	rm -f $(OBJ_CPU) $(OBJ_GPU) test_cpu test_gpu
+	rm -f $(OBJ_CPU) $(OBJ_GPU) laplace_cpu laplace_gpu
