@@ -25,7 +25,16 @@
 #include <cutil.h>
 
 /** Double precision */
-#define Real double
+#define DOUBLE
+
+#ifdef DOUBLE
+	#define Real double
+#else
+	#define Real float
+#endif
+
+/** Use texture memory */
+#define TEXTURE
 
 typedef unsigned int uint;
 
@@ -33,10 +42,41 @@ typedef unsigned int uint;
 const Real omega = 1.85;
 
 /** Problem size along one side; total number of cells is this squared */
-#define NUM 8192
+#define NUM 512
 
 // block size
 #define BLOCK_SIZE 128
+
+#ifdef TEXTURE
+#ifdef DOUBLE
+texture<int2,1> aP_t;
+texture<int2,1> aW_t;
+texture<int2,1> aE_t;
+texture<int2,1> aS_t;
+texture<int2,1> aN_t;
+texture<int2,1> b_t;
+
+static __inline__ __device__ double get_tex(texture<int2, 1> tex, int i)
+{
+	int2 v = tex1Dfetch(tex, i);
+	return __hiloint2double(v.y, v.x);
+}
+#else
+texture<float> aP_t;
+texture<float> aW_t;
+texture<float> aE_t;
+texture<float> aS_t;
+texture<float> aN_t;
+texture<float> b_t;
+
+static __inline__ __device__ float get_tex(texture<float> tex, int i)
+{
+	return tex1Dfetch(tex, i);
+}
+#endif
+#endif
+
+///////////////////////////////////////////////////////////////////////////////
 
 /** Function to evaluate coefficient matrix and right-hand side vector.
  * 
@@ -117,10 +157,14 @@ void fill_coeffs (uint rowmax, uint colmax, Real th_cond, Real dx, Real dy,
  * \param[inout]	temp_red		temperatures of red cells
  * \param[out]		bl_norm_L2	array with residual information for blocks
  */
+#ifdef TEXTURE
+__global__ void red_kernel (const Real * temp_black, Real * temp_red, Real * bl_norm_L2)
+#else
 __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 														const Real * aS, const Real * aN, const Real * b,
 														const Real * temp_black, Real * temp_red,
 														Real * bl_norm_L2)
+#endif
 {	
 	uint row = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
 	uint col = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
@@ -132,13 +176,25 @@ __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 	uint ind_red = col * ((NUM >> 1) + 2) + row;  		// local (red) index
 	uint ind = 2 * row - (col & 1) - 1 + NUM * (col - 1);	// global index
 	
-	Real res = b[ind] + (aW[ind] * temp_black[row + (col - 1) * ((NUM >> 1) + 2)]
-									   + aE[ind] * temp_black[row + (col + 1) * ((NUM >> 1) + 2)]
-									   + aS[ind] * temp_black[row - (col & 1) + col * ((NUM >> 1) + 2)]
-									   + aN[ind] * temp_black[row + ((col + 1) & 1) + col * ((NUM >> 1) + 2)]);
-	
 	Real temp_old = temp_red[ind_red];
-	Real temp_new = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
+	
+	#ifdef TEXTURE
+	Real res = get_tex(b_t, ind) 
+					 + (get_tex(aW_t, ind) * temp_black[row + (col - 1) * ((NUM >> 1) + 2)]
+				    + get_tex(aE_t, ind) * temp_black[row + (col + 1) * ((NUM >> 1) + 2)]
+				    + get_tex(aS_t, ind) * temp_black[row - (col & 1) + col * ((NUM >> 1) + 2)]
+				    + get_tex(aN_t, ind) * temp_black[row + ((col + 1) & 1) + col * ((NUM >> 1) + 2)]);
+	
+	Real temp_new = temp_old * (1.0 - omega) + omega * (res / get_tex(aP_t, ind));
+	#else
+	Real res = b_t[ind]
+					 + (aW_t[ind] * temp_black[row + (col - 1) * ((NUM >> 1) + 2)]
+				    + aE_t[ind] * temp_black[row + (col + 1) * ((NUM >> 1) + 2)]
+				    + aS_t[ind] * temp_black[row - (col & 1) + col * ((NUM >> 1) + 2)]
+				    + aN_t[ind] * temp_black[row + ((col + 1) & 1) + col * ((NUM >> 1) + 2)]);
+	
+	Real temp_new = temp_old * (1.0 - omega) + omega * (res / aP_t[ind]);
+	#endif
 	
 	temp_red[ind_red] = temp_new;
 	res = temp_old - temp_new;
@@ -179,10 +235,13 @@ __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
  * \param[inout]	temp_black	temperatures of black cells
  * \param[out]		bl_norm_L2	array with residual information for blocks
  */
+/*
 __global__ void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 														  const Real * aS, const Real * aN, const Real * b,
 															const Real * temp_red, Real * temp_black, 
 															Real * bl_norm_L2)
+*/
+__global__ void black_kernel (const Real * temp_red, Real * temp_black, Real * bl_norm_L2)
 {	
 	uint row = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
 	uint col = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
@@ -194,13 +253,24 @@ __global__ void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 	uint ind_black = col * ((NUM >> 1) + 2) + row;  					// local (black) index
 	uint ind = 2 * row - ((col + 1) & 1) - 1 + NUM * (col - 1);	// global index
 	
-	Real res = b[ind] + (aW[ind] * temp_red[row + (col - 1) * ((NUM >> 1) + 2)]
-									   + aE[ind] * temp_red[row + (col + 1) * ((NUM >> 1) + 2)]
-									   + aS[ind] * temp_red[row - ((col + 1) & 1) + col * ((NUM >> 1) + 2)]
-									   + aN[ind] * temp_red[row + (col & 1) + col * ((NUM >> 1) + 2)]);
-	
 	Real temp_old = temp_black[ind_black];
-	Real temp_new = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
+	#ifdef TEXTURE
+	Real res = get_tex(b_t, ind)
+	 				 + (get_tex(aW_t, ind) * temp_red[row + (col - 1) * ((NUM >> 1) + 2)]
+				    + get_tex(aE_t, ind) * temp_red[row + (col + 1) * ((NUM >> 1) + 2)]
+				    + get_tex(aS_t, ind) * temp_red[row - ((col + 1) & 1) + col * ((NUM >> 1) + 2)]
+				    + get_tex(aN_t, ind) * temp_red[row + (col & 1) + col * ((NUM >> 1) + 2)]);
+	
+	Real temp_new = temp_old * (1.0 - omega) + omega * (res / get_tex(aP_t, ind));
+	#else
+	Real res = b_t[ind]
+	 				 + (aW_t[ind] * temp_red[row + (col - 1) * ((NUM >> 1) + 2)]
+				    + aE_t[ind] * temp_red[row + (col + 1) * ((NUM >> 1) + 2)]
+				    + aS_t[ind] * temp_red[row - ((col + 1) & 1) + col * ((NUM >> 1) + 2)]
+				    + aN_t[ind] * temp_red[row + (col & 1) + col * ((NUM >> 1) + 2)]);
+	
+	Real temp_new = temp_old * (1.0 - omega) + omega * (res / aP_t[ind]);
+	#endif
 	
 	temp_black[ind_black] = temp_new;
 	res = temp_old - temp_new;
@@ -323,6 +393,16 @@ int main (void) {
 	CUDA_SAFE_CALL (cudaMemcpy (temp_red_d, temp_red, size_temp * sizeof(Real), cudaMemcpyHostToDevice));
 	CUDA_SAFE_CALL (cudaMemcpy (temp_black_d, temp_black, size_temp * sizeof(Real), cudaMemcpyHostToDevice));
 	
+	#ifdef TEXTURE
+	// bind to textures
+	CUDA_SAFE_CALL (cudaBindTexture (NULL, aP_t, aP_d, size * sizeof(Real)));
+	CUDA_SAFE_CALL (cudaBindTexture (NULL, aW_t, aW_d, size * sizeof(Real)));
+	CUDA_SAFE_CALL (cudaBindTexture (NULL, aE_t, aE_d, size * sizeof(Real)));
+	CUDA_SAFE_CALL (cudaBindTexture (NULL, aS_t, aS_d, size * sizeof(Real)));
+	CUDA_SAFE_CALL (cudaBindTexture (NULL, aN_t, aN_d, size * sizeof(Real)));
+	CUDA_SAFE_CALL (cudaBindTexture (NULL, b_t, b_d, size * sizeof(Real)));
+	#endif
+	
 	// block and grid dimensions
 	
 	///////////////////////////////////////
@@ -348,7 +428,11 @@ int main (void) {
 		Real norm_L2 = 0.0;
 		
 		// update red cells
+		#ifdef TEXTURE
+		red_kernel <<<dimGrid, dimBlock>>> (temp_black_d, temp_red_d, bl_norm_L2_d);
+		#else
 		red_kernel <<<dimGrid, dimBlock>>> (aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_black_d, temp_red_d, bl_norm_L2_d);
+		#endif
 		
 		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, dimGrid.x * dimGrid.y * sizeof(Real), cudaMemcpyDeviceToHost));
 		
@@ -358,7 +442,11 @@ int main (void) {
 		}
 		
 		// update black cells
+		#ifdef TEXTURE
+		black_kernel <<<dimGrid, dimBlock>>> (temp_red_d, temp_black_d, bl_norm_L2_d);
+		#else
 		black_kernel <<<dimGrid, dimBlock>>> (aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_red_d, temp_black_d, bl_norm_L2_d);
+		#endif
 		
 		// sync threads (needed?)
 		//CUDA_SAFE_CALL (cudaThreadSynchronize());
@@ -395,6 +483,16 @@ int main (void) {
 	CUDA_SAFE_CALL (cudaFree(temp_black_d));
 	
 	CUDA_SAFE_CALL (cudaFree(bl_norm_L2_d));
+	
+	#ifdef TEXTURE
+	// unbind textures
+	CUDA_SAFE_CALL (cudaUnbindTexture(aP_t));
+	CUDA_SAFE_CALL (cudaUnbindTexture(aW_t));
+	CUDA_SAFE_CALL (cudaUnbindTexture(aE_t));
+	CUDA_SAFE_CALL (cudaUnbindTexture(aS_t));
+	CUDA_SAFE_CALL (cudaUnbindTexture(aN_t));
+	CUDA_SAFE_CALL (cudaUnbindTexture(b_t));
+	#endif
 	
 	/////////////////////////////////
 	// end timer
