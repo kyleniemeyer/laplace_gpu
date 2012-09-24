@@ -108,10 +108,11 @@ void fill_coeffs (uint rowmax, uint colmax, Real th_cond, Real dx, Real dy,
  * \param[in]			b						right-hand side array
  * \param[in]			temp_black	temperatures of black cells, constant in this function
  * \param[inout]	temp_red		temperatures of red cells
+ * \param[out]		norm_L2			variable holding summed residuals
  */
 void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 								 const Real * aS, const Real * aN, const Real * b,
-								 const Real * temp_black, Real * temp_red)
+								 const Real * temp_black, Real * temp_red, Real * norm_L2)
 {
 	// loop over actual cells, skip boundary cells
 	for (uint col = 1; col < NUM + 1; ++col) {
@@ -125,7 +126,12 @@ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 											   + aS[ind] * temp_black[row - (col % 2) + col * ((NUM / 2) + 2)]
 											   + aN[ind] * temp_black[row + ((col + 1) % 2) + col * ((NUM / 2) + 2)]);
 			
-			temp_red[ind_red] = temp_red[ind_red] * (1.0 - omega) + omega * (res / aP[ind]);
+			Real temp_old = temp_red[ind_red];
+			temp_red[ind_red] = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
+			
+			// calculate residual
+			res = temp_red[ind_red] - temp_old;
+			*norm_L2 += (res * res);
 				
 		} // end for row
 	} // end for col	
@@ -143,10 +149,11 @@ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
  * \param[in]			b						right-hand side array
  * \param[in]			temp_red		temperatures of red cells, constant in this function
  * \param[inout]	temp_black	temperatures of black cells
+ * \param[out]		norm_L2			variable holding summed residuals
  */
 void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 								   const Real * aS, const Real * aN, const Real * b,
-									 const Real * temp_red, Real * temp_black)
+									 const Real * temp_red, Real * temp_black, Real * norm_L2)
 {
 	// loop over actual cells, skip boundary cells
 	for (uint col = 1; col < NUM + 1; ++col) {
@@ -160,7 +167,12 @@ void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 											   + aS[ind] * temp_red[row - ((col + 1) % 2) + col * ((NUM / 2) + 2)]
 											   + aN[ind] * temp_red[row + (col % 2) + col * ((NUM / 2) + 2)]);
 			
-			temp_black[ind_black] = temp_black[ind_black] * (1.0 - omega) + omega * (res / aP[ind]);
+			Real temp_old = temp_black[ind_black];
+			temp_black[ind_black] = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
+			
+			// calculate residual
+			res = temp_black[ind_black] - temp_old;
+			*norm_L2 += (res * res);
 			
 		} // end for row
 	} // end for col
@@ -247,22 +259,26 @@ int main (void) {
 		Real norm_L2 = 0.0;
 		
 		// update red cells
-		red_kernel (aP, aW, aE, aS, aN, b, temp_black, temp_red);
+		red_kernel (aP, aW, aE, aS, aN, b, temp_black, temp_red, &norm_L2);
 		
+		/*
 		// add red contribution to residual
 		for (uint i = 0; i < size_temp; ++i) {
 			norm_L2 += (temp_red[i] - temp_red_old[i]) * (temp_red[i] - temp_red_old[i]);
 			temp_red_old[i] = temp_red[i];
 		}
+		*/
 		
 		// update black cells
-		black_kernel (aP, aW, aE, aS, aN, b, temp_red, temp_black);
+		black_kernel (aP, aW, aE, aS, aN, b, temp_red, temp_black, &norm_L2);
 		
+		/*
 		// add black contribution to residual
 		for (uint i = 0; i < size_temp; ++i) {
 			norm_L2 += (temp_black[i] - temp_black_old[i]) * (temp_black[i] - temp_black_old[i]);
 			temp_black_old[i] = temp_black[i];
 		}
+		*/
 		
 		// calculate residual
 		norm_L2 = sqrt(norm_L2 / (size));

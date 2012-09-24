@@ -105,11 +105,14 @@ void fill_coeffs (uint rowmax, uint colmax, Real th_cond, Real dx, Real dy,
  * \param[in]			aN					array of north neighbor coefficients
  * \param[in]			b						right-hand side array
  * \param[inout]	temp_red		array of cell temperatures
+ * \param[out]		norm_L2			variable holding summed residuals
  */
 void gauss_seidel (const Real * aP, const Real * aW, const Real * aE, 
 								 	 const Real * aS, const Real * aN, const Real * b,
-									 Real * temp)
+									 Real * temp, Real * norm_L2)
 {
+	*norm_L2 = 0.0;
+	
 	for (uint col = 1; col < NUM + 1; ++col) {
 		for (uint row = 1; row < NUM + 1; ++row) {
 			
@@ -121,7 +124,11 @@ void gauss_seidel (const Real * aP, const Real * aW, const Real * aE,
 												 + aS[ind] * temp[col * (NUM + 2) + (row - 1)]
 												 + aN[ind] * temp[col * (NUM + 2) + (row + 1)]);
 			
-			temp[ind_temp] = temp[ind_temp] * (1.0 - omega) + omega * (res / aP[ind]);
+			Real temp_old = temp[ind_temp];
+			temp[ind_temp] = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
+			
+			res = temp[ind_temp] - temp_old;
+			*norm_L2 += (res * res);
 			
 		} // end for row
 	} // end for col
@@ -199,15 +206,13 @@ int main (void) {
 	// Gauss-Seidel with SOR iteration loop
 	for (iter = 1; iter <= it_max; ++iter) {
 		
+		// residual variable
+		Real norm_L2 = 0.0;
+		
 		// gauss-seidel iteration
-		gauss_seidel (aP, aW, aE, aS, aN, b, temp);
+		gauss_seidel (aP, aW, aE, aS, aN, b, temp, &norm_L2);
 		
 		// calculate residual
-		Real norm_L2 = 0.0;
-		for (uint i = 0; i < size_temp; ++i) {
-			norm_L2 += (temp[i] - temp_old[i]) * (temp[i] - temp_old[i]);
-			temp_old[i] = temp[i];
-		}
 		norm_L2 = sqrt(norm_L2 / (size));
 		
 		// if tolerance has been reached, end SOR iterations
