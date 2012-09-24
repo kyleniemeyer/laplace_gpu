@@ -24,8 +24,14 @@
 #include <cuda.h>
 #include <cutil.h>
 
+/** Problem size along one side; total number of cells is this squared */
+#define NUM 2048
+
+// block size
+#define BLOCK_SIZE 128
+
 /** Double precision */
-#define DOUBLE
+//#define DOUBLE
 
 #ifdef DOUBLE
 	#define Real double
@@ -34,18 +40,19 @@
 #endif
 
 /** Use texture memory */
-#define TEXTURE
+//#define TEXTURE
+
+/** Use atomic operations to calculate residual, only for SINGLE PRECISION */
+//#define ATOMIC
+
+#if defined (ATOMIC) && defined (DOUBLE)
+# error double precision atomic operations not supported
+#endif
 
 typedef unsigned int uint;
 
 /** SOR relaxation parameter */
 const Real omega = 1.85;
-
-/** Problem size along one side; total number of cells is this squared */
-#define NUM 512
-
-// block size
-#define BLOCK_SIZE 128
 
 #ifdef TEXTURE
 #ifdef DOUBLE
@@ -217,7 +224,11 @@ __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 	
 	// store block's summed residuals
 	if (threadIdx.y == 0) {
+		#ifdef ATOMIC
+		atomicAdd (bl_norm_L2, res_cache[0]);
+		#else
 		bl_norm_L2[blockIdx.x + (gridDim.x * blockIdx.y)] = res_cache[0];
+		#endif
 	}
 } // end red_kernel
 
@@ -294,7 +305,11 @@ __global__ void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 	
 	// store block's summed residuals
 	if (threadIdx.y == 0) {
+		#ifdef ATOMIC
+		atomicAdd (bl_norm_L2, res_cache[0]);
+		#else
 		bl_norm_L2[blockIdx.x + (gridDim.x * blockIdx.y)] = res_cache[0];
+		#endif
 	}
 } // end black_kernel
 
@@ -366,8 +381,8 @@ int main (void) {
 	
 	//////////////////////////////
 	// start timer
-	//double time, start_time = 0.0;
-	//time = walltime(&start_time);
+	////double time, start_time = 0.0;
+	////time = walltime(&start_time);
 	clock_t start_time = clock();
 	//////////////////////////////
 	
@@ -418,15 +433,28 @@ int main (void) {
 	dim3 dimGrid (NUM, NUM / (2 * BLOCK_SIZE));
 	///////////////////////////////////////
 	
+	// residual variables
 	Real *bl_norm_L2, *bl_norm_L2_d;
-	
+		
+	#ifdef ATOMIC
+	// single value, using atomic operations to sum
+	bl_norm_L2 = (Real *) malloc (sizeof(Real));
+	CUDA_SAFE_CALL (cudaMalloc ((void**) &bl_norm_L2_d, sizeof(Real)));
+	#else
 	bl_norm_L2 = (Real *) calloc (dimGrid.x * dimGrid.y, sizeof(Real));
 	CUDA_SAFE_CALL (cudaMalloc ((void**) &bl_norm_L2_d, dimGrid.x * dimGrid.y * sizeof(Real)));
+	#endif
 		
 	// iteration loop
 	for (iter = 1; iter <= it_max; ++iter) {
 		
 		Real norm_L2 = 0.0;
+		
+		#ifdef ATOMIC
+		// set device value to zero
+		*bl_norm_L2 = 0.0;
+		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2_d, bl_norm_L2, sizeof(Real), cudaMemcpyHostToDevice));
+		#endif
 		
 		// update red cells
 		#ifdef TEXTURE
@@ -435,12 +463,26 @@ int main (void) {
 		red_kernel <<<dimGrid, dimBlock>>> (aP_d, aW_d, aE_d, aS_d, aN_d, b_d, temp_black_d, temp_red_d, bl_norm_L2_d);
 		#endif
 		
+		// transfer residual value(s) back to CPU
+		#ifdef ATOMIC
+		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, sizeof(Real), cudaMemcpyDeviceToHost));
+		#else
 		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, dimGrid.x * dimGrid.y * sizeof(Real), cudaMemcpyDeviceToHost));
+		#endif
 		
 		// add red cell contributions to residual
+		#ifndef ATOMIC
 		for (uint i = 0; i < (dimGrid.x * dimGrid.y); ++i) {
 			norm_L2 += bl_norm_L2[i];
 		}
+		#endif
+		norm_L2 += *bl_norm_L2;
+		
+		#ifdef ATOMIC
+		// set device value to zero
+		*bl_norm_L2 = 0.0;
+		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2_d, bl_norm_L2, sizeof(Real), cudaMemcpyHostToDevice));
+		#endif
 		
 		// update black cells
 		#ifdef TEXTURE
@@ -452,13 +494,20 @@ int main (void) {
 		// sync threads (needed?)
 		//CUDA_SAFE_CALL (cudaThreadSynchronize());
 		
-		// transfer residuals back
+		// transfer residual value(s) back to CPU
+		#ifdef ATOMIC
+		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, sizeof(Real), cudaMemcpyDeviceToHost));
+		#else
 		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, dimGrid.x * dimGrid.y * sizeof(Real), cudaMemcpyDeviceToHost));
+		#endif
 		
 		// add black cell contributions to residual
+		#ifndef ATOMIC
 		for (uint i = 0; i < (dimGrid.x * dimGrid.y); ++i) {
 			norm_L2 += bl_norm_L2[i];
 		}
+		#endif
+		norm_L2 += *bl_norm_L2;
 		
 		// calculate residual
 		norm_L2 = sqrt(norm_L2 / size);
@@ -539,8 +588,9 @@ int main (void) {
 	free(b);
 	free(temp_red);
 	free(temp_black);
-	
+	#ifndef ATOMIC
 	free(bl_norm_L2);
+	#endif
 	
 	cudaDeviceReset();
 	
