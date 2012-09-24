@@ -187,13 +187,13 @@ __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 	
 	Real temp_new = temp_old * (1.0 - omega) + omega * (res / get_tex(aP_t, ind));
 	#else
-	Real res = b_t[ind]
-					 + (aW_t[ind] * temp_black[row + (col - 1) * ((NUM >> 1) + 2)]
-				    + aE_t[ind] * temp_black[row + (col + 1) * ((NUM >> 1) + 2)]
-				    + aS_t[ind] * temp_black[row - (col & 1) + col * ((NUM >> 1) + 2)]
-				    + aN_t[ind] * temp_black[row + ((col + 1) & 1) + col * ((NUM >> 1) + 2)]);
+	Real res = b[ind]
+					 + (aW[ind] * temp_black[row + (col - 1) * ((NUM >> 1) + 2)]
+				    + aE[ind] * temp_black[row + (col + 1) * ((NUM >> 1) + 2)]
+				    + aS[ind] * temp_black[row - (col & 1) + col * ((NUM >> 1) + 2)]
+				    + aN[ind] * temp_black[row + ((col + 1) & 1) + col * ((NUM >> 1) + 2)]);
 	
-	Real temp_new = temp_old * (1.0 - omega) + omega * (res / aP_t[ind]);
+	Real temp_new = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
 	#endif
 	
 	temp_red[ind_red] = temp_new;
@@ -235,13 +235,14 @@ __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
  * \param[inout]	temp_black	temperatures of black cells
  * \param[out]		bl_norm_L2	array with residual information for blocks
  */
-/*
+#ifdef TEXTURE
+__global__ void black_kernel (const Real * temp_red, Real * temp_black, Real * bl_norm_L2)
+#else
 __global__ void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 														  const Real * aS, const Real * aN, const Real * b,
 															const Real * temp_red, Real * temp_black, 
 															Real * bl_norm_L2)
-*/
-__global__ void black_kernel (const Real * temp_red, Real * temp_black, Real * bl_norm_L2)
+#endif
 {	
 	uint row = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
 	uint col = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
@@ -263,13 +264,13 @@ __global__ void black_kernel (const Real * temp_red, Real * temp_black, Real * b
 	
 	Real temp_new = temp_old * (1.0 - omega) + omega * (res / get_tex(aP_t, ind));
 	#else
-	Real res = b_t[ind]
-	 				 + (aW_t[ind] * temp_red[row + (col - 1) * ((NUM >> 1) + 2)]
-				    + aE_t[ind] * temp_red[row + (col + 1) * ((NUM >> 1) + 2)]
-				    + aS_t[ind] * temp_red[row - ((col + 1) & 1) + col * ((NUM >> 1) + 2)]
-				    + aN_t[ind] * temp_red[row + (col & 1) + col * ((NUM >> 1) + 2)]);
+	Real res = b[ind]
+	 				 + (aW[ind] * temp_red[row + (col - 1) * ((NUM >> 1) + 2)]
+				    + aE[ind] * temp_red[row + (col + 1) * ((NUM >> 1) + 2)]
+				    + aS[ind] * temp_red[row - ((col + 1) & 1) + col * ((NUM >> 1) + 2)]
+				    + aN[ind] * temp_red[row + (col & 1) + col * ((NUM >> 1) + 2)]);
 	
-	Real temp_new = temp_old * (1.0 - omega) + omega * (res / aP_t[ind]);
+	Real temp_new = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
 	#endif
 	
 	temp_black[ind_black] = temp_new;
