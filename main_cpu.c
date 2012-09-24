@@ -20,7 +20,13 @@
 #include <time.h>
 
 /** Double precision */
-#define Real double
+#define DOUBLE
+
+#ifdef DOUBLE
+	#define Real double
+#else
+	#define Real float
+#endif
 
 typedef unsigned int uint;
 
