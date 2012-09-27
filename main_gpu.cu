@@ -219,7 +219,7 @@ __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 			res_cache[threadIdx.y] += res_cache[threadIdx.y + i];
 		}
 		__syncthreads();
-		i = i >> 1;
+		i >>= 1;
 	}
 	
 	// store block's summed residuals
@@ -300,7 +300,7 @@ __global__ void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 			res_cache[threadIdx.y] += res_cache[threadIdx.y + i];
 		}
 		__syncthreads();
-		i = i >> 1;
+		i >>= 1;
 	}
 	
 	// store block's summed residuals
