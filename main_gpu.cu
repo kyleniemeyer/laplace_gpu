@@ -464,24 +464,13 @@ int main (void) {
 		#endif
 		
 		// transfer residual value(s) back to CPU
-		#ifdef ATOMIC
-		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, sizeof(Real), cudaMemcpyDeviceToHost));
-		#else
+		#ifndef ATOMIC
 		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, dimGrid.x * dimGrid.y * sizeof(Real), cudaMemcpyDeviceToHost));
-		#endif
 		
 		// add red cell contributions to residual
-		#ifndef ATOMIC
 		for (uint i = 0; i < (dimGrid.x * dimGrid.y); ++i) {
 			norm_L2 += bl_norm_L2[i];
 		}
-		#endif
-		norm_L2 += *bl_norm_L2;
-		
-		#ifdef ATOMIC
-		// set device value to zero
-		*bl_norm_L2 = 0.0;
-		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2_d, bl_norm_L2, sizeof(Real), cudaMemcpyHostToDevice));
 		#endif
 		
 		// update black cells
@@ -494,20 +483,17 @@ int main (void) {
 		// sync threads (needed?)
 		//CUDA_SAFE_CALL (cudaThreadSynchronize());
 		
-		// transfer residual value(s) back to CPU
+		// transfer residual value(s) back to CPU and 
+		// add black cell contributions to residual
 		#ifdef ATOMIC
 		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, sizeof(Real), cudaMemcpyDeviceToHost));
+		norm_L2 = *bl_norm_L2;
 		#else
 		CUDA_SAFE_CALL (cudaMemcpy (bl_norm_L2, bl_norm_L2_d, dimGrid.x * dimGrid.y * sizeof(Real), cudaMemcpyDeviceToHost));
-		#endif
-		
-		// add black cell contributions to residual
-		#ifndef ATOMIC
 		for (uint i = 0; i < (dimGrid.x * dimGrid.y); ++i) {
 			norm_L2 += bl_norm_L2[i];
 		}
 		#endif
-		norm_L2 += *bl_norm_L2;
 		
 		// calculate residual
 		norm_L2 = sqrt(norm_L2 / size);
