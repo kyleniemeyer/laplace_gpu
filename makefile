@@ -4,53 +4,49 @@ SHELL = /bin/sh
 .SUFFIXES: .cu .cu.o .c .o
 
 CUDA_PATH = /usr/local/cuda
-SDK_PATH = /Developer/GPU\ Computing
+SDK_PATH = /usr/local/cuda/samples/common/inc/
 
 NVCC = $(CUDA_PATH)/bin/nvcc
-CC = gcc
-LINK = llvm-gcc-4.2 -fPIC -Xlinker -rpath $(CUDA_PATH)/lib
+CC   = /usr/local/gcc-4.6.2/bin/gcc
+PGCC = pgcc
+
+LINK = $(CC) -fPIC -Xlinker -rpath $(CUDA_PATH)/lib64
 
 #FLAGS, L=0 for testing, L=4 for optimization
 ifndef L
   L = 4
 endif
 
-INCLUDES = -I. -I$(CUDA_PATH)/include/ -I$(SDK_PATH)/C/common/inc/
-LIBS = -L$(CUDA_PATH)/lib -lcuda -L$(SDK_PATH)/C/lib/ -lcutil_x86_64
-
-OBJ_CPU = laplace_cpu.o
-OBJ_GPU = laplace_gpu.cu.o
+# paths
+INCLUDES = -I. -I$(CUDA_PATH)/include/ -I$(SDK_PATH)
+LIBS = -L$(CUDA_PATH)/lib64 -lcuda -lcudart
 
 # flags
-ifeq ("$(L)", "0")
-	NVCCFLAGS   = -m64 -O0 -g -G
-	#NVCCFLAGS  += -Xcompiler "-O0 -g -fno-strict-aliasing -m64"
-	
-	FLAGS = -g -O0 -fbounds-check -Wunused-variable -Wunused-parameter \
-	      -pedantic-errors -Wall -pedantic -ftree-vrp -std=c99 -m64
-	FLAGS += -da -Q
-else ifeq ("$(L)", "4")
-	NVCCFLAGS   = -O3 -use_fast_math -arch=sm_20 -m64
-	#NVCCFLAGS  += -Xcompiler "-O3 -ffast-math"
-	FLAGS = -O3 -ffast-math -std=c99 -m64
-endif
-
-NVCCFLAGS  += --compiler-bindir=llvm-gcc-4.2
+CCFLAGS   = -O3 -ffast-math -std=c99 -m64
+PGCCFLAGS = -fast
+ACCFLAGS  = -acc -ta=nvidia,cuda4.2,cc20 -Minfo=accel -lpgacc #-Minline=levels:2
+OMPFLAGS  = -fast -mp -Minfo
+NVCCFLAGS = -O3 -arch=sm_20 -m64
 
 %.cu.o : %.cu
 	$(NVCC) -c -o $@ $< $(NVCCFLAGS) $(INCLUDES)
 
-%.o : %.c
-	$(CC) -c -o $@ $< $(FLAGS) $(INCLUDES)
+all : laplace_cpu laplace_gpu laplace_omp laplace_acc
 
-all : laplace_cpu laplace_gpu
+laplace_cpu : laplace_cpu.c
+	$(CC) -o $@ $< $(CCFLAGS)
 
-laplace_cpu : $(OBJ_CPU)
-	$(CC) -o laplace_cpu $(OBJ_CPU) $(LIBS) $(FLAGS)
+laplace_omp : laplace_cpu.c
+	$(PGCC) -o $@ $< $(PGCCFLAGS) $(OMPFLAGS)
+# alternatively, gcc can be used
+#	$(CC) -o $@ $< -O3 -fopenmp -lm
 
-laplace_gpu : $(OBJ_GPU)
-	$(LINK) -o laplace_gpu $(OBJ_GPU) $(LIBS) $(FLAGS)
+laplace_acc : laplace_cpu.c
+	$(PGCC) -o $@ $< $(PGCCFLAGS) $(ACCFLAGS)
+
+laplace_gpu : laplace_gpu.cu.o
+	$(LINK) -o $@ $< $(LIBS) $(CCFLAGS)
 
 .PHONY : clean
 clean :
-	rm -f $(OBJ_CPU) $(OBJ_GPU) laplace_cpu laplace_gpu
+	rm -f *.cu.o laplace_cpu laplace_gpu laplace_omp laplace_acc
