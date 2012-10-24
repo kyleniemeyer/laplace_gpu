@@ -19,22 +19,50 @@
 #include <math.h>
 #include <time.h>
 
+#include "timer.h"
+
 /** Double precision */
 #define DOUBLE
 
 #ifdef DOUBLE
 	#define Real double
+	#define ZERO 0.0
+	#define ONE 1.0
+	#define TWO 2.0
+
+ 	/** SOR relaxation parameter */
+	const Real omega = 1.85;
 #else
 	#define Real float
+	#define ZERO 0.0f
+	#define ONE 1.0f
+	#define TWO 2.0f
+
+	/** SOR relaxation parameter */
+	const Real omega = 1.85f;
 #endif
 
-typedef unsigned int uint;
+// OpenACC
+#ifdef _OPENACC
+	#include <openacc.h>
+#endif
 
-/** SOR relaxation parameter */
-const Real omega = 1.85;
+// OpenMP
+#ifdef _OPENMP
+	#include <omp.h>
+#else
+	#define omp_get_max_threads() 1
+#endif
+
+#if __STDC_VERSION__ < 199901L
+	#define restrict __restrict__
+#endif
 
 /** Problem size along one side; total number of cells is this squared */
-#define NUM 8192
+#define NUM 4096
+
+#define SIZE (NUM * NUM)
+#define SIZET (NUM * NUM/2 + 3*NUM + 4)
 
 /** Function to evaluate coefficient matrix and right-hand side vector.
  * 
@@ -52,46 +80,48 @@ const Real omega = 1.85;
  * \param[out]	aN				array of north neighbor coefficients
  * \param[out]	b					right-hand side array
  */
-void fill_coeffs (uint rowmax, uint colmax, Real th_cond, Real dx, Real dy,
+void fill_coeffs (int rowmax, int colmax, Real th_cond, Real dx, Real dy,
 									Real width, Real TN, Real * aP, Real * aW, Real * aE, 
 									Real * aS, Real * aN, Real * b) {
   
-  for (uint col = 0; col < colmax; ++col) {
-		for (uint row = 0; row < rowmax; ++row) {
-			uint ind = col * rowmax + row;
+	int col, row;
+	
+  for (col = 0; col < colmax; ++col) {
+		for (row = 0; row < rowmax; ++row) {
+			int ind = col * rowmax + row;
 			
-			b[ind] = 0.0;
-			Real SP = 0.0;
+			b[ind] = ZERO;
+			Real SP = ZERO;
 			
 			if (col == 0) {
 				// left BC: temp = 0
-				aW[ind] = 0.0;
-				SP = -2.0 * th_cond * width * dy / dx;
+				aW[ind] = ZERO;
+				SP = -TWO * th_cond * width * dy / dx;
 			} else {
 				aW[ind] = th_cond * width * dy / dx;
 			}
 			
 			if (col == colmax - 1) {
 				// right BC: temp = 0
-				aE[ind] = 0.0;
-				SP = -2.0 * th_cond * width * dy / dx;
+				aE[ind] = ZERO;
+				SP = -TWO * th_cond * width * dy / dx;
 			} else {
 				aE[ind] = th_cond * width * dy / dx;
 			}
 			
 			if (row == 0) {
 				// bottom BC: temp = 0
-				aS[ind] = 0.0;
-				SP = -2.0 * th_cond * width * dx / dy;
+				aS[ind] = ZERO;
+				SP = -TWO * th_cond * width * dx / dy;
 			} else {
 				aS[ind] = th_cond * width * dx / dy;
 			}
 			
 			if (row == rowmax - 1) {
 				// top BC: temp = TN
-				aN[ind] = 0.0;
-				b[ind] = 2.0 * th_cond * width * dx * TN / dy;
-				SP = -2.0 * th_cond * width * dx / dy;
+				aN[ind] = ZERO;
+				b[ind] = TWO * th_cond * width * dx * TN / dy;
+				SP = -TWO * th_cond * width * dx / dy;
 			} else {
 				aN[ind] = th_cond * width * dx / dy;
 			}
@@ -114,18 +144,29 @@ void fill_coeffs (uint rowmax, uint colmax, Real th_cond, Real dx, Real dy,
  * \param[in]			b						right-hand side array
  * \param[in]			temp_black	temperatures of black cells, constant in this function
  * \param[inout]	temp_red		temperatures of red cells
- * \param[out]		norm_L2			variable holding summed residuals
+ * \return				norm_L2			summed residuals
  */
-void red_kernel (const Real * aP, const Real * aW, const Real * aE,
-								 const Real * aS, const Real * aN, const Real * b,
-								 const Real * temp_black, Real * temp_red, Real * norm_L2)
+Real red_kernel (const Real *restrict aP, const Real *restrict aW,
+								 const Real *restrict aE, const Real *restrict aS, 
+								 const Real *restrict aN, const Real *restrict b,
+								 const Real *restrict temp_black, Real *restrict temp_red)
 {
+	Real norm_L2 = ZERO;
+	int col, row;
+	
 	// loop over actual cells, skip boundary cells
-	for (uint col = 1; col < NUM + 1; ++col) {
-		for (uint row = 1; row < (NUM / 2) + 1; ++row) {
+	#pragma omp parallel for shared(aP, aW, aE, aS, aN, temp_black, temp_red) \
+					reduction(+:norm_L2) private(col, row)
+	#pragma acc kernels present(aP[0:SIZE], aW[0:SIZE], aE[0:SIZE], aS[0:SIZE], aN[0:SIZE], b[0:SIZE], temp_red[0:SIZET], temp_black[0:SIZET])
+	#pragma acc loop independent
+	for (col = 1; col < NUM + 1; ++col) {
+		#pragma acc loop independent gang vector(128)
+		for (row = 1; row < (NUM / 2) + 1; ++row) {
 			
-			uint ind_red = col * ((NUM / 2) + 2) + row;  		// local (red) index
-			uint ind = 2 * row - (col % 2) - 1 + NUM * (col - 1);	// global index
+			int ind_red = col * ((NUM / 2) + 2) + row;  		// local (red) index
+			int ind = 2 * row - (col % 2) - 1 + NUM * (col - 1);	// global index
+			
+			#pragma acc cache(aP[ind], b[ind], aW[ind], aE[ind], aS[ind], aN[ind])
 			
 			Real res = b[ind] + (aW[ind] * temp_black[row + (col - 1) * ((NUM / 2) + 2)]
 											   + aE[ind] * temp_black[row + (col + 1) * ((NUM / 2) + 2)]
@@ -133,14 +174,16 @@ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 											   + aN[ind] * temp_black[row + ((col + 1) % 2) + col * ((NUM / 2) + 2)]);
 			
 			Real temp_old = temp_red[ind_red];
-			temp_red[ind_red] = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
+			temp_red[ind_red] = temp_old * (ONE - omega) + omega * (res / aP[ind]);
 			
 			// calculate residual
 			res = temp_red[ind_red] - temp_old;
-			*norm_L2 += (res * res);
+			norm_L2 += (res * res);
 				
 		} // end for row
-	} // end for col	
+	} // end for col
+	
+	return norm_L2;
 } // end red_kernel
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -155,18 +198,29 @@ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
  * \param[in]			b						right-hand side array
  * \param[in]			temp_red		temperatures of red cells, constant in this function
  * \param[inout]	temp_black	temperatures of black cells
- * \param[out]		norm_L2			variable holding summed residuals
+ * \return				norm_L2			variable holding summed residuals
  */
-void black_kernel (const Real * aP, const Real * aW, const Real * aE,
-								   const Real * aS, const Real * aN, const Real * b,
-									 const Real * temp_red, Real * temp_black, Real * norm_L2)
+Real black_kernel (const Real *restrict aP, const Real *restrict aW,
+									 const Real *restrict aE, const Real *restrict aS,
+								   const Real *restrict aN, const Real *restrict b,
+									 const Real *restrict temp_red, Real *restrict temp_black)
 {
+	Real norm_L2 = ZERO;
+	int col, row;
+	
 	// loop over actual cells, skip boundary cells
-	for (uint col = 1; col < NUM + 1; ++col) {
-		for (uint row = 1; row < (NUM / 2) + 1; ++row) {
+	#pragma omp parallel for shared(aP, aW, aE, aS, aN, temp_black, temp_red) \
+					reduction(+:norm_L2) private(col, row)
+	#pragma acc kernels present(aP[0:SIZE], aW[0:SIZE], aE[0:SIZE], aS[0:SIZE], aN[0:SIZE], b[0:SIZE], temp_red[0:SIZET], temp_black[0:SIZET])
+	#pragma acc loop independent
+	for (col = 1; col < NUM + 1; ++col) {
+		#pragma acc loop independent gang vector(128)
+		for (row = 1; row < (NUM / 2) + 1; ++row) {
 			
-			uint ind_black = col * ((NUM / 2) + 2) + row;  					// local (black) index
-			uint ind = 2 * row - ((col + 1) % 2) - 1 + NUM * (col - 1);	// global index
+			int ind_black = col * ((NUM / 2) + 2) + row;  					// local (black) index
+			int ind = 2 * row - ((col + 1) % 2) - 1 + NUM * (col - 1);	// global index
+			
+			#pragma acc cache(aP[ind], b[ind], aW[ind], aE[ind], aS[ind], aN[ind])
 
 			Real res = b[ind] + (aW[ind] * temp_red[row + (col - 1) * ((NUM / 2) + 2)]
 											   + aE[ind] * temp_red[row + (col + 1) * ((NUM / 2) + 2)]
@@ -174,14 +228,16 @@ void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 											   + aN[ind] * temp_red[row + (col % 2) + col * ((NUM / 2) + 2)]);
 			
 			Real temp_old = temp_black[ind_black];
-			temp_black[ind_black] = temp_old * (1.0 - omega) + omega * (res / aP[ind]);
+			temp_black[ind_black] = temp_old * (ONE - omega) + omega * (res / aP[ind]);
 			
 			// calculate residual
 			res = temp_black[ind_black] - temp_old;
-			*norm_L2 += (res * res);
+			norm_L2 += (res * res);
 			
 		} // end for row
 	} // end for col
+	
+	return norm_L2;
 } // end black_kernel
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -208,23 +264,22 @@ int main (void) {
 	
 	// number of cells in x and y directions
 	// including unused boundary cells
-	uint num_rows = (NUM / 2) + 2;
-	uint num_cols = NUM + 2;
-	uint size_temp = num_rows * num_cols;
-	uint size = NUM * NUM;
+	int num_rows = (NUM / 2) + 2;
+	int num_cols = NUM + 2;
+	int size_temp = num_rows * num_cols;
+	int size = NUM * NUM;
 	
 	// size of cells
 	Real dx = L / NUM;
 	Real dy = H / NUM;
 	
 	// iterations for Red-Black Gauss-Seidel with SOR
-	uint iter;
-	uint it_max = 1e6;
+	int iter;
+	int it_max = 1e6;
 	
 	// allocate memory
-	Real *aP, *aW, *aE, *aS, *aN, *b;
-	Real *temp_red, *temp_red_old;
-	Real *temp_black, *temp_black_old;
+	Real *restrict aP, *restrict aW, *restrict aE, *restrict aS, *restrict aN, *restrict b;
+	Real *restrict temp_red, *restrict temp_black;
 	
 	// arrays of coefficients
 	aP = (Real *) calloc (size, sizeof(Real));
@@ -238,56 +293,50 @@ int main (void) {
 	
 	// temperature arrays for red and black cells
 	temp_red = (Real *) calloc (size_temp, sizeof(Real));
-	temp_red_old = (Real *) calloc (size_temp, sizeof(Real));
 	temp_black = (Real *) calloc (size_temp, sizeof(Real));
-	temp_black_old = (Real *) calloc (size_temp, sizeof(Real));
 	
 	// set coefficients
 	fill_coeffs (NUM, NUM, th_cond, dx, dy, width, TN, aP, aW, aE, aS, aN, b);
 	
-	for (uint i = 0; i < size_temp; ++i) {
-		temp_red[i] = 0.0;
-		temp_red_old[i] = 0.0;
-		temp_black[i] = 0.0;
-		temp_black_old[i] = 0.0;
+	int i;
+	for (i = 0; i < size_temp; ++i) {
+		temp_red[i] = ZERO;
+		temp_black[i] = ZERO;
 	}
+	
+	#ifdef _OPENACC
+	// initialize device
+	acc_init(acc_device_nvidia);
+	acc_set_device_num(0, acc_device_nvidia);
+	#endif
+	
+	// print problem info
+	printf("Problem size: %d x %d \n", NUM, NUM);
+	printf("Max threads: %d\n", omp_get_max_threads());
 	
 	//////////////////////////////
 	// start timer
-	//double time, start_time = 0.0;
-	//time = walltime(&start_time);
-	clock_t start_time = clock();
+	//clock_t start_time = clock();
+	StartTimer();
 	//////////////////////////////
 	
 	// red-black Gauss-Seidel with SOR iteration loop
+	#pragma acc data copyin(aP[0:SIZE], aW[0:SIZE], aE[0:SIZE], aS[0:SIZE], aN[0:SIZE], b[0:SIZE]) \
+									 copy(temp_red[0:SIZET], temp_black[0:SIZET])
 	for (iter = 1; iter <= it_max; ++iter) {
 		
-		Real norm_L2 = 0.0;
+		Real norm_L2 = ZERO;
 		
 		// update red cells
-		red_kernel (aP, aW, aE, aS, aN, b, temp_black, temp_red, &norm_L2);
-		
-		/*
-		// add red contribution to residual
-		for (uint i = 0; i < size_temp; ++i) {
-			norm_L2 += (temp_red[i] - temp_red_old[i]) * (temp_red[i] - temp_red_old[i]);
-			temp_red_old[i] = temp_red[i];
-		}
-		*/
+		norm_L2 += red_kernel (aP, aW, aE, aS, aN, b, temp_black, temp_red);
 		
 		// update black cells
-		black_kernel (aP, aW, aE, aS, aN, b, temp_red, temp_black, &norm_L2);
-		
-		/*
-		// add black contribution to residual
-		for (uint i = 0; i < size_temp; ++i) {
-			norm_L2 += (temp_black[i] - temp_black_old[i]) * (temp_black[i] - temp_black_old[i]);
-			temp_black_old[i] = temp_black[i];
-		}
-		*/
+		norm_L2 += black_kernel (aP, aW, aE, aS, aN, b, temp_red, temp_black);
 		
 		// calculate residual
-		norm_L2 = sqrt(norm_L2 / (size));
+		norm_L2 = sqrt(norm_L2 / ((Real)size));
+
+		if (iter % 100 == 0) printf("%5d, %0.6f\n", iter, norm_L2);
 		
 		// if tolerance has been reached, end SOR iterations
 		if (norm_L2 < tol) {
@@ -297,12 +346,20 @@ int main (void) {
 	
 	/////////////////////////////////
 	// end timer
-	//time = walltime(&time);
-	clock_t end_time = clock();
+	//clock_t end_time = clock();
+	double runtime = GetTimer();
 	/////////////////////////////////
 	
-	printf("CPU\nIterations: %i\n", iter);
-	printf("Time: %f\n", (end_time - start_time) / (double)CLOCKS_PER_SEC);
+	#if defined(_OPENMP)
+		printf("OpenMP\n");
+	#elif defined(_OPENACC)
+		printf("OpenACC\n");
+	#else
+		printf("CPU\n");
+	#endif
+	printf("Iterations: %i\n", iter);
+	//printf("Time: %f\n", (end_time - start_time) / (double)CLOCKS_PER_SEC);
+	printf("Total time: %f s\n", runtime / 1000);
 	
 	// write temperature data to file
 	FILE * pfile;
@@ -310,18 +367,19 @@ int main (void) {
 	if (pfile != NULL) {
 		fprintf(pfile, "#x\ty\ttemp(K)\n");
 		
-		for (uint row = 1; row < NUM + 1; ++row) {
-			for (uint col = 1; col < NUM + 1; ++col) {
+		int row, col;
+		for (row = 1; row < NUM + 1; ++row) {
+			for (col = 1; col < NUM + 1; ++col) {
 				Real x_pos = (col - 1) * dx + (dx / 2);
 				Real y_pos = (row - 1) * dy + (dy / 2);
 				
 				if ((row + col) % 2 == 0) {
 					// even, so red cell
-					uint ind = col * num_rows + (row + (col % 2)) / 2;
+					int ind = col * num_rows + (row + (col % 2)) / 2;
 					fprintf(pfile, "%f\t%f\t%f\n", x_pos, y_pos, temp_red[ind]);
 				} else {
 					// odd, so black cell
-					uint ind = col * num_rows + (row + ((col + 1) % 2)) / 2;
+					int ind = col * num_rows + (row + ((col + 1) % 2)) / 2;
 					fprintf(pfile, "%f\t%f\t%f\n", x_pos, y_pos, temp_black[ind]);
 				}
 				
@@ -339,9 +397,7 @@ int main (void) {
 	free(aN);
 	free(b);
 	free(temp_red);
-	free(temp_red_old);
 	free(temp_black);
-	free(temp_black_old);
 	
 	return 0;
 }
