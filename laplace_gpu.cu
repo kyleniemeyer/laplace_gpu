@@ -26,13 +26,13 @@
 #include <helper_cuda.h>
 
 /** Problem size along one side; total number of cells is this squared */
-#define NUM 2048
+#define NUM 8192
 
 // block size
 #define BLOCK_SIZE 128
 
 /** Double precision */
-#define DOUBLE
+//#define DOUBLE
 
 #ifdef DOUBLE
 	#define Real double
@@ -59,7 +59,7 @@
 #define MEMOPT
 
 /** Use shared memory to get residual */
-//#define SHARED
+#define SHARED
 
 /** Use texture memory */
 //#define TEXTURE
@@ -191,17 +191,17 @@ __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 														Real * norm_L2)
 #endif
 {	
-	int row = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
-	int col = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
+	int row = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
+	int col = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
 
 	// store residual for block
 	#ifdef SHARED
 		__shared__ Real res_cache[BLOCK_SIZE];
-		res_cache[threadIdx.y] = ZERO;
+		res_cache[threadIdx.x] = ZERO;
 	#endif
 	
 	#ifdef MEMOPT
-		int ind_red = col * ((NUM >> 1) + 2) + row;  		// local (red) index
+		int ind_red = col * ((NUM >> 1) + 2) + row;  					// local (red) index
 		int ind = 2 * row - (col & 1) - 1 + NUM * (col - 1);	// global index
 	#else
 	if ((row + col) % 2 == 0) {
@@ -213,7 +213,7 @@ __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 	
 	#if defined(TEXTURE) && defined(MEMOPT)
 		Real res = get_tex(b_t, ind)
-		 				+ (get_tex(aW_t, ind) * temp_black[row + (col - 1) * ((NUM >> 1) + 2)]
+		 			  + (get_tex(aW_t, ind) * temp_black[row + (col - 1) * ((NUM >> 1) + 2)]
 					   + get_tex(aE_t, ind) * temp_black[row + (col + 1) * ((NUM >> 1) + 2)]
 					   + get_tex(aS_t, ind) * temp_black[row - (col & 1) + col * ((NUM >> 1) + 2)]
 					   + get_tex(aN_t, ind) * temp_black[row + ((col + 1) & 1) + col * ((NUM >> 1) + 2)]);
@@ -251,7 +251,7 @@ __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 	
 	#ifdef SHARED
 		// store squared residual from each thread in block
-		res_cache[threadIdx.y] = res * res;
+	res_cache[threadIdx.x] = res * res;
 		
 		// synchronize threads in block
 		__syncthreads();
@@ -259,19 +259,19 @@ __global__ void red_kernel (const Real * aP, const Real * aW, const Real * aE,
 		// add up squared residuals for block
 		int i = BLOCK_SIZE >> 1;
 		while (i != 0) {
-			if (threadIdx.y < i) {
-				res_cache[threadIdx.y] += res_cache[threadIdx.y + i];
+			if (threadIdx.x < i) {
+				res_cache[threadIdx.x] += res_cache[threadIdx.x + i];
 			}
 			__syncthreads();
 			i >>= 1;
 		}
 		
 		// store block's summed residuals
-		if (threadIdx.y == 0) {
+		if (threadIdx.x == 0) {
 			#ifdef ATOMIC
 				atomicAdd (norm_L2, res_cache[0]);
 			#else
-				norm_L2[blockIdx.x + (gridDim.x * blockIdx.y)] = res_cache[0];
+				norm_L2[blockIdx.y + (gridDim.y * blockIdx.x)] = res_cache[0];
 			#endif
 		}
 	#else
@@ -305,18 +305,18 @@ __global__ void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 								const Real * temp_red, Real * temp_black, 
 								Real * norm_L2)
 #endif
-{	
-	int row = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
-	int col = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
+{
+	int row = 1 + (blockIdx.x * blockDim.x) + threadIdx.x;
+	int col = 1 + (blockIdx.y * blockDim.y) + threadIdx.y;
 	
 	#ifdef SHARED
 		// store residual for block
 		__shared__ Real res_cache[BLOCK_SIZE];
-		res_cache[threadIdx.y] = ZERO;
+		res_cache[threadIdx.x] = ZERO;
 	#endif
 	
 	#ifdef MEMOPT	
-		int ind_black = col * ((NUM >> 1) + 2) + row;  					// local (black) index
+		int ind_black = col * ((NUM >> 1) + 2) + row;  				// local (black) index
 		int ind = 2 * row - ((col + 1) & 1) - 1 + NUM * (col - 1);	// global index
 	#else
 	if ((row + col) % 2 == 1) {
@@ -366,7 +366,7 @@ __global__ void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 	
 	#ifdef SHARED
 		// store squared residual from each thread in block
-		res_cache[threadIdx.y] = res * res;
+	res_cache[threadIdx.x] = res * res;
 		
 		// synchronize threads in block
 		__syncthreads();
@@ -374,19 +374,19 @@ __global__ void black_kernel (const Real * aP, const Real * aW, const Real * aE,
 		// add up squared residuals for block
 		int i = BLOCK_SIZE >> 1;
 		while (i != 0) {
-			if (threadIdx.y < i) {
-				res_cache[threadIdx.y] += res_cache[threadIdx.y + i];
+			if (threadIdx.x < i) {
+				res_cache[threadIdx.x] += res_cache[threadIdx.x + i];
 			}
 			__syncthreads();
 			i >>= 1;
 		}
 		
 		// store block's summed residuals
-		if (threadIdx.y == 0) {
+		if (threadIdx.x == 0) {
 			#ifdef ATOMIC
 				atomicAdd (norm_L2, res_cache[0]);
 			#else
-				norm_L2[blockIdx.x + (gridDim.x * blockIdx.y)] = res_cache[0];
+				norm_L2[blockIdx.y + (gridDim.y * blockIdx.x)] = res_cache[0];
 			#endif
 		}
 	#else
@@ -473,21 +473,21 @@ int main (void) {
 	#ifdef COALESCE
 		///////////////////////////////////////
 		// coalescing
-		dim3 dimBlock (1, BLOCK_SIZE);
+		dim3 dimBlock (BLOCK_SIZE, 1);
 		#ifdef MEMOPT
-			dim3 dimGrid (NUM, NUM / (2 * BLOCK_SIZE));
+			dim3 dimGrid (NUM / (2 * BLOCK_SIZE), NUM);
 		#else
-			dim3 dimGrid (NUM, NUM / BLOCK_SIZE);
+			dim3 dimGrid (NUM / BLOCK_SIZE, NUM);
 		#endif
 		///////////////////////////////////////
 	#else
 		///////////////////////////////////////
 		// naive (no coalescing)
-		dim3 dimBlock (BLOCK_SIZE, 1);
+		dim3 dimBlock (1, BLOCK_SIZE);
 		#ifdef MEMOPT
-			dim3 dimGrid (NUM / BLOCK_SIZE, NUM / 2);
+			dim3 dimGrid (NUM / 2, NUM / BLOCK_SIZE);
 		#else
-			dim3 dimGrid (NUM / BLOCK_SIZE, NUM);
+			dim3 dimGrid (NUM, NUM / BLOCK_SIZE);
 		#endif
 		///////////////////////////////////////
 	#endif
