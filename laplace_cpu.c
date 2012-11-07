@@ -21,8 +21,11 @@
 
 #include "timer.h"
 
+/** Problem size along one side; total number of cells is this squared */
+#define NUM 2048
+
 /** Double precision */
-#define DOUBLE
+//#define DOUBLE
 
 #ifdef DOUBLE
 	#define Real double
@@ -57,9 +60,6 @@
 #if __STDC_VERSION__ < 199901L
 	#define restrict __restrict__
 #endif
-
-/** Problem size along one side; total number of cells is this squared */
-#define NUM 4096
 
 #define SIZE (NUM * NUM)
 #define SIZET (NUM * NUM/2 + 3*NUM + 4)
@@ -160,13 +160,11 @@ Real red_kernel (const Real *restrict aP, const Real *restrict aW,
 	#pragma acc kernels present(aP[0:SIZE], aW[0:SIZE], aE[0:SIZE], aS[0:SIZE], aN[0:SIZE], b[0:SIZE], temp_red[0:SIZET], temp_black[0:SIZET])
 	#pragma acc loop independent
 	for (col = 1; col < NUM + 1; ++col) {
-		#pragma acc loop independent gang vector(128)
+		#pragma acc loop independent
 		for (row = 1; row < (NUM / 2) + 1; ++row) {
 			
 			int ind_red = col * ((NUM / 2) + 2) + row;  		// local (red) index
 			int ind = 2 * row - (col % 2) - 1 + NUM * (col - 1);	// global index
-			
-			#pragma acc cache(aP[ind], b[ind], aW[ind], aE[ind], aS[ind], aN[ind])
 			
 			Real res = b[ind] + (aW[ind] * temp_black[row + (col - 1) * ((NUM / 2) + 2)]
 											   + aE[ind] * temp_black[row + (col + 1) * ((NUM / 2) + 2)]
@@ -214,13 +212,11 @@ Real black_kernel (const Real *restrict aP, const Real *restrict aW,
 	#pragma acc kernels present(aP[0:SIZE], aW[0:SIZE], aE[0:SIZE], aS[0:SIZE], aN[0:SIZE], b[0:SIZE], temp_red[0:SIZET], temp_black[0:SIZET])
 	#pragma acc loop independent
 	for (col = 1; col < NUM + 1; ++col) {
-		#pragma acc loop independent gang vector(128)
+		#pragma acc loop independent
 		for (row = 1; row < (NUM / 2) + 1; ++row) {
 			
 			int ind_black = col * ((NUM / 2) + 2) + row;  					// local (black) index
 			int ind = 2 * row - ((col + 1) % 2) - 1 + NUM * (col - 1);	// global index
-			
-			#pragma acc cache(aP[ind], b[ind], aW[ind], aE[ind], aS[ind], aN[ind])
 
 			Real res = b[ind] + (aW[ind] * temp_red[row + (col - 1) * ((NUM / 2) + 2)]
 											   + aE[ind] * temp_red[row + (col + 1) * ((NUM / 2) + 2)]
